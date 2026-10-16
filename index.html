@@ -42,17 +42,20 @@
         <div class="bg-indigo-600 p-2 rounded-lg font-bold text-xl">草圖</div>
         <div>
           <h1 class="text-xl font-bold">草圖設計工作室</h1>
-          <p class="text-xs text-slate-400">人事薪資與差勤管理系統 (含 Google 雲端同步)</p>
+          <p class="text-xs text-slate-400">人事薪資與差勤管理系統 (雲端同步版)</p>
         </div>
       </div>
 
-      <nav class="flex gap-2 bg-slate-800 p-1 rounded-xl items-center">
+      <nav class="flex gap-2 bg-slate-800 p-1 rounded-xl items-center flex-wrap">
         <button onclick="switchTab('employees')" id="tab-employees" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">員工資料管理</button>
         <button onclick="switchTab('attendance')" id="tab-attendance" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-300 hover:text-white">差勤與加請假</button>
         <button onclick="switchTab('payroll')" id="tab-payroll" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-300 hover:text-white">薪資計算與發放</button>
         <div class="h-6 w-[1px] bg-slate-700 mx-1"></div>
+        <button onclick="loadFromCloud()" class="bg-sky-600 hover:bg-sky-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1">
+          📥 從雲端載入
+        </button>
         <button onclick="syncToCloud()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1">
-          ☁️ 同步至雲端
+          ☁️ 立即同步雲端
         </button>
       </nav>
     </div>
@@ -400,12 +403,11 @@
 
   <!-- JavaScript 邏輯引擎 -->
   <script>
-    // Google Apps Script 部署網址
     const GAS_URL = "https://script.google.com/macros/s/AKfycbwgoey3rt-R079loXBB6DqcBPRHZMIGYWJB0OlJtdrzuECYzKB4U_4ce2qMgYBGGD3s/exec";
 
     let employees = [];
     let attendance = [];
-    let monthlyBonuses = {}; // 格式：{ 'empId_YYYY-MM': [ { name: '交通津貼', amount: 0 }, ... ] }
+    let monthlyBonuses = {};
 
     const defaultBonusTypes = [
       '伙食津貼', '職務津貼', '交通津貼', '全勤獎金', '三節禮金', 
@@ -416,29 +418,44 @@
       const now = new Date();
       const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       document.getElementById('currentMonth').value = currentYearMonth;
-      loadLocalData();
+      
+      // 啟動時自動從雲端載入資料
+      loadFromCloud();
     });
+
+    // --- 從 Google 雲端載入資料 ---
+    async function loadFromCloud() {
+      try {
+        const res = await fetch(GAS_URL);
+        const data = await res.json();
+        
+        if (data.employees && data.employees.length > 0) {
+          employees = data.employees;
+        }
+        if (data.attendance && data.attendance.length > 0) {
+          attendance = data.attendance;
+        }
+        if (data.monthlyBonuses && Object.keys(data.monthlyBonuses).length > 0) {
+          monthlyBonuses = data.monthlyBonuses;
+        }
+
+        saveToLocal();
+        renderAll();
+        console.log("已成功從雲端同步最新資料！");
+      } catch (err) {
+        console.warn("從雲端載入失敗，改用本機快取資料：", err);
+        loadLocalData();
+      }
+    }
 
     function loadLocalData() {
       const savedEmp = localStorage.getItem('draft_employees');
       const savedAtt = localStorage.getItem('draft_attendance');
       const savedBonuses = localStorage.getItem('draft_monthly_bonuses');
 
-      if (savedEmp) {
-        employees = JSON.parse(savedEmp);
-      } else {
-        employees = [];
-      }
-
-      if (savedAtt) {
-        attendance = JSON.parse(savedAtt);
-      } else {
-        attendance = [];
-      }
-
-      if (savedBonuses) {
-        monthlyBonuses = JSON.parse(savedBonuses);
-      }
+      if (savedEmp) employees = JSON.parse(savedEmp);
+      if (savedAtt) attendance = JSON.parse(savedAtt);
+      if (savedBonuses) monthlyBonuses = JSON.parse(savedBonuses);
 
       renderAll();
     }
@@ -449,10 +466,9 @@
       localStorage.setItem('draft_monthly_bonuses', JSON.stringify(monthlyBonuses));
     }
 
-    // --- Google Apps Script 雲端同步功能 ---
+    // --- 同步至 Google 雲端並自動儲存 ---
     async function syncToCloud() {
-      if (!confirm('確定要將當前系統資料同步上傳至 Google 雲端試算表嗎？')) return;
-
+      saveToLocal();
       const payload = {
         action: "saveData",
         employees: employees,
@@ -461,30 +477,26 @@
       };
 
       try {
-        // 提示同步中
         const btn = document.querySelector('button[onclick="syncToCloud()"]');
         const originalText = btn.innerHTML;
         btn.innerHTML = '⏳ 同步中...';
         btn.disabled = true;
 
-        // 使用 no-cors 或標準 fetch (視您的 GAS 權限設定而定，通常 POST 需妥善處理跨域回應)
         await fetch(GAS_URL, {
           method: "POST",
-          mode: "no-cors", 
-          headers: {
-            "Content-Type": "application/json"
-          },
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
 
-        alert('資料已成功發送至 Google Apps Script 雲端備份！');
+        alert('資料已成功同步至 Google 雲端試算表！');
         btn.innerHTML = originalText;
         btn.disabled = false;
       } catch (err) {
         console.error(err);
-        alert('雲端同步發生錯誤，請檢查網路連線或 GAS 網址設定。');
+        alert('雲端同步發生錯誤。');
         const btn = document.querySelector('button[onclick="syncToCloud()"]');
-        btn.innerHTML = '☁️ 同步至雲端';
+        btn.innerHTML = '☁️ 立即同步雲端';
         btn.disabled = false;
       }
     }
@@ -516,7 +528,6 @@
       return str;
     }
 
-    // --- 自動精確計算年資 (精確至年、月) ---
     function calculateSeniority(startDateStr, currentMonthStr) {
       if (!startDateStr) return { years: 0, months: 0, totalMonths: 0, text: '0年 0個月' };
       const start = new Date(startDateStr);
@@ -591,18 +602,13 @@
       return { laborIns, healthIns, isProrated: resigInfo.isResigned, insuredDays: resigInfo.workedDays };
     }
 
-    // --- 取得當月員工加給清單 (自動產生生日禮金、1月15日自動發放年終獎金並按到職日未滿一年比例計算) ---
     function getEmpBonusesList(emp, currentMonthStr) {
       const key = `${emp.id}_${currentMonthStr}`;
-      
-      if (monthlyBonuses[key]) {
-        return monthlyBonuses[key];
-      }
+      if (monthlyBonuses[key]) return monthlyBonuses[key];
 
       let list = [];
       const [curYear, curMonth] = currentMonthStr.split('-').map(Number);
 
-      // 1. 自動檢查是否為當月壽星 (生日禮金 1000 元)
       if (emp.dob) {
         const empDobMonth = parseInt(emp.dob.split('-')[1], 10);
         if (empDobMonth === curMonth) {
@@ -610,9 +616,8 @@
         }
       }
 
-      // 2. 年終獎金固定於 1 月份（1月15日發放）計算
       if (curMonth === 1) {
-        const targetYear = curYear - 1; // 計算去年度年終
+        const targetYear = curYear - 1;
         const startDate = new Date(emp.startDate);
         const yearStart = new Date(targetYear, 0, 1);
         const yearEnd = new Date(targetYear, 11, 31);
@@ -816,7 +821,6 @@
       });
     }
 
-    // --- 員工 CRUD ---
     function openEmployeeModal(empId = null) {
       document.getElementById('empForm').reset();
       if (empId) {
@@ -874,6 +878,7 @@
       }
 
       saveToLocal();
+      syncToCloud(); // 每次修改自動同步雲端
       closeEmployeeModal();
       renderAll();
     }
@@ -883,11 +888,11 @@
         employees = employees.filter(e => e.id !== empId);
         attendance = attendance.filter(a => a.empId !== empId);
         saveToLocal();
+        syncToCloud();
         renderAll();
       }
     }
 
-    // --- 後台獎金與津貼補助動態維護 Modal ---
     function openBonusModal(empId) {
       const emp = employees.find(e => e.id === empId);
       const currentMonth = document.getElementById('currentMonth').value;
@@ -956,18 +961,16 @@
       rows.forEach(row => {
         const name = row.querySelector('.bonus-name').value.trim();
         const amount = Number(row.querySelector('.bonus-amount').value) || 0;
-        if (name) {
-          newList.push({ name, amount });
-        }
+        if (name) newList.push({ name, amount });
       });
 
       monthlyBonuses[key] = newList;
       saveToLocal();
+      syncToCloud();
       closeBonusModal();
       renderAll();
     }
 
-    // --- 差勤 CRUD ---
     function openAttendanceModal() {
       if (employees.length === 0) {
         alert('請先新增至少一位員工才能登錄差勤紀錄！');
@@ -1020,6 +1023,7 @@
         note: document.getElementById('att_note').value
       });
       saveToLocal();
+      syncToCloud();
       closeAttendanceModal();
       renderAll();
     }
@@ -1028,11 +1032,11 @@
       if (confirm('確定要刪除這筆差勤紀錄嗎？')) {
         attendance = attendance.filter(a => a.id !== attId);
         saveToLocal();
+        syncToCloud();
         renderAll();
       }
     }
 
-    // --- Excel / CSV 匯入 ---
     function handleExcelImport(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -1098,8 +1102,9 @@
 
           if (importCount > 0) {
             saveToLocal();
+            syncToCloud();
             renderAll();
-            alert(`成功匯入 ${importCount} 筆員工資料！`);
+            alert(`成功匯入 ${importCount} 筆員工資料並同步至雲端！`);
           } else {
             alert('未讀取到有效的員工資料。');
           }
@@ -1135,14 +1140,14 @@
           }
         }
         saveToLocal();
+        syncToCloud();
         renderAll();
-        alert(`成功匯入 ${count} 筆差勤紀錄！`);
+        alert(`成功匯入 ${count} 筆差勤紀錄並同步至雲端！`);
       };
       reader.readAsText(file);
       event.target.value = '';
     }
 
-    // --- 薪資單 Modal 操作 (僅顯示有發出的金額項目，未填寫/為0自動隱藏) ---
     function openPayslipModal(empId) {
       const emp = employees.find(e => e.id === empId);
       if (!emp) return;
@@ -1177,7 +1182,6 @@
       leaveDeduction = Math.round(leaveDeduction);
       overtimePay = Math.round(overtimePay);
 
-      // 動態加給明細
       const bonusList = getEmpBonusesList(emp, currentMonth);
       const totalBonus = bonusList.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
@@ -1187,7 +1191,6 @@
       const totalDeduction = leaveDeduction + ins.laborIns + ins.healthIns;
       const netPay = totalGross - totalDeduction;
 
-      // 填入薪資單基本欄位
       document.getElementById('ps_payPeriod').innerText = `計薪年月：${currentMonth}`;
       document.getElementById('ps_empCode').innerText = emp.code;
       document.getElementById('ps_empName').innerText = emp.name;
@@ -1196,13 +1199,7 @@
 
       const toggleRow = (rowId, val) => {
         const el = document.getElementById(rowId);
-        if (el) {
-          if (val > 0) {
-            el.style.display = 'flex';
-          } else {
-            el.style.display = 'none';
-          }
-        }
+        if (el) el.style.display = (val > 0) ? 'flex' : 'none';
       };
 
       document.getElementById('ps_baseSalary').innerText = `${adjustedSalary.toLocaleString()}${resigInfo.isResigned ? ` (按日 ${resigInfo.workedDays}天)` : ''}`;
@@ -1214,7 +1211,6 @@
       document.getElementById('ps_dutyAllowance').innerText = duty.toLocaleString();
       toggleRow('ps_row_dutyAllowance', duty);
 
-      // 動態產生薪資單中的津貼/補助/獎金列 (過濾金額大於0的項目)
       const dynContainer = document.getElementById('ps_dynamicBonusesContainer');
       dynContainer.innerHTML = '';
       const validBonuses = bonusList.filter(b => Number(b.amount) > 0);
