@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>草圖設計工作室 - 人事薪資與差勤管理系統</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS CDN (Excel 匯入) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    /* 列印專屬設定 (符合勞基法正式薪資單格式) */
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #printArea, #printArea * {
+        visibility: visible;
+      }
+      #printArea {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        padding: 20px;
+        background: white;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen">
+
+  <!-- Header / Navigation -->
+  <header class="bg-slate-900 text-white shadow-md no-print">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+      <div class="flex items-center gap-3">
+        <div class="bg-indigo-600 p-2 rounded-lg font-bold text-xl">草圖</div>
+        <div>
+          <h1 class="text-xl font-bold">草圖設計工作室</h1>
+          <p class="text-xs text-slate-400">人事薪資與差勤管理系統 (含 Google 雲端同步)</p>
+        </div>
+      </div>
+
+      <nav class="flex gap-2 bg-slate-800 p-1 rounded-xl items-center">
+        <button onclick="switchTab('employees')" id="tab-employees" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">員工資料管理</button>
+        <button onclick="switchTab('attendance')" id="tab-attendance" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-300 hover:text-white">差勤與加請假</button>
+        <button onclick="switchTab('payroll')" id="tab-payroll" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-300 hover:text-white">薪資計算與發放</button>
+        <div class="h-6 w-[1px] bg-slate-700 mx-1"></div>
+        <button onclick="syncToCloud()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1">
+          ☁️ 同步至雲端
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="max-w-7xl mx-auto px-4 py-6">
+
+    <!-- 全域設定列 -->
+    <div class="bg-white p-4 rounded-xl shadow-sm mb-6 flex flex-wrap justify-between items-center gap-4 no-print">
+      <div class="flex items-center gap-4">
+        <label class="text-sm font-bold text-slate-700">當前計算月份：</label>
+        <input type="month" id="currentMonth" onchange="renderAll()" class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+      </div>
+      
+      <div class="flex items-center gap-4">
+        <label class="text-sm font-bold text-slate-700">資安脫敏切換：</label>
+        <select id="maskMode" onchange="renderAll()" class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+          <option value="masked">部分隱藏 (*號遮罩)</option>
+          <option value="visible">完全顯示</option>
+          <option value="hidden">全不顯示 (***)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- TAB 1: 員工資料管理 -->
+    <section id="sec-employees" class="tab-content space-y-6">
+      <div class="bg-white p-6 rounded-xl shadow-sm">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">員工基本資料名冊</h2>
+            <p class="text-xs text-slate-500">自動支援每半年調薪 1.5% 與年資、離職薪資/勞保按日、健保按月計費</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <label class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg cursor-pointer transition">
+              匯入 Excel 員工資料
+              <input type="file" id="excelInput" accept=".xlsx, .xls" onchange="handleExcelImport(event)" class="hidden">
+            </label>
+            <button onclick="openEmployeeModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-lg transition">+ 手動新增員工</button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600">
+                <th class="p-3">工號/姓名</th>
+                <th class="p-3">身分證/生日</th>
+                <th class="p-3">到職/離職日/自動年資</th>
+                <th class="p-3">銀行帳號</th>
+                <th class="p-3">原始底薪</th>
+                <th class="p-3">當期底薪(含調薪)</th>
+                <th class="p-3">固定津貼(初始0)</th>
+                <th class="p-3">勞/健保自負額</th>
+                <th class="p-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="employeeTableBody">
+              <!-- JS 動態繪製 -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: 差勤與請假加班 -->
+    <section id="sec-attendance" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-xl shadow-sm">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">差勤、請假與加班明細</h2>
+            <p class="text-xs text-slate-500">依據勞基法對照：事假全扣、病假/生理假半扣、加班費倍率</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <label class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-2 rounded-lg cursor-pointer transition">
+              匯入 CSV 差勤檔
+              <input type="file" id="csvInput" accept=".csv" onchange="handleCSVImport(event)" class="hidden">
+            </label>
+            <button onclick="openAttendanceModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-lg transition">+ 新增差勤紀錄</button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600">
+                <th class="p-3">日期</th>
+                <th class="p-3">員工</th>
+                <th class="p-3">類別</th>
+                <th class="p-3">請假類型/假別</th>
+                <th class="p-3">時數 (小時)</th>
+                <th class="p-3">事由/備註</th>
+                <th class="p-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="attendanceTableBody">
+              <!-- JS 動態繪製 -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: 薪資計算與發放 -->
+    <section id="sec-payroll" class="tab-content hidden space-y-6">
+      <div class="bg-white p-6 rounded-xl shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">月薪資彙整與發放表</h2>
+            <p class="text-xs text-slate-500">自動結算：底薪 + 壽星生日禮金 + 1月15日發放年終獎金(未滿一年依到職日比例) + 津貼補助 + 加班費 - 請假扣款 - 勞健保</p>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600">
+                <th class="p-3">員工</th>
+                <th class="p-3">應領底薪</th>
+                <th class="p-3">固定津貼</th>
+                <th class="p-3">當月加給明細 (含1月15日自動比例年終/生日禮金/後台設定)</th>
+                <th class="p-3">加班費</th>
+                <th class="p-3 text-red-600">請假扣款</th>
+                <th class="p-3 text-red-600">勞健保自負</th>
+                <th class="p-3 font-bold text-indigo-600">實發金額</th>
+                <th class="p-3 text-right">操作 / 薪資單</th>
+              </tr>
+            </thead>
+            <tbody id="payrollTableBody">
+              <!-- JS 動態繪製 -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- modal: 新增/編輯員工 -->
+  <div id="employeeModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50 no-print">
+    <div class="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl space-y-4">
+      <h3 id="empModalTitle" class="text-lg font-bold text-slate-800">新增員工</h3>
+      <form id="empForm" onsubmit="saveEmployee(event)" class="space-y-3 text-sm">
+        <input type="hidden" id="emp_id">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">員工工號</label>
+            <input type="text" id="emp_code" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">姓名</label>
+            <input type="text" id="emp_name" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">身分證字號</label>
+            <input type="text" id="emp_idCard" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">出生年月日 (決定生日禮金月份)</label>
+            <input type="date" id="emp_dob" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">到職日期 (決定年資與年終比例)</label>
+            <input type="date" id="emp_startDate" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">離職日期 (選填)</label>
+            <input type="date" id="emp_resignationDate" class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1">銀行帳號</label>
+          <input type="text" id="emp_bankAccount" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">原始底薪</label>
+            <input type="number" id="emp_baseSalary" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">伙食津貼 (初始0)</label>
+            <input type="number" id="emp_foodAllowance" value="0" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">職務津貼 (初始0)</label>
+            <input type="number" id="emp_dutyAllowance" value="0" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 pt-4">
+          <button type="button" onclick="closeEmployeeModal()" class="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">取消</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">儲存資料</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- modal: 後台獎金與津貼補助設定調整 -->
+  <div id="bonusModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50 no-print">
+    <div class="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl space-y-4">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 class="text-lg font-bold text-slate-800" id="bonusModalTitle">後台津貼、補助與獎金設定</h3>
+        <button onclick="addBonusItemRow()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg transition">+ 新增項目</button>
+      </div>
+      
+      <form id="bonusForm" onsubmit="saveMonthlyBonuses(event)" class="space-y-4 text-sm">
+        <input type="hidden" id="bm_empId">
+        <input type="hidden" id="bm_month">
+
+        <!-- 動態項目列表容器 -->
+        <div id="bonusRowsContainer" class="space-y-3 max-h-60 overflow-y-auto pr-1">
+          <!-- JS 動態塞入下拉與金額輸入 -->
+        </div>
+
+        <div class="flex justify-end gap-2 pt-4 border-t">
+          <button type="button" onclick="closeBonusModal()" class="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">取消</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">儲存變更</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- modal: 新增/編輯差勤紀錄 -->
+  <div id="attendanceModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50 no-print">
+    <div class="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4">
+      <h3 id="attModalTitle" class="text-lg font-bold text-slate-800">新增差勤/請假/加班</h3>
+      <form id="attForm" onsubmit="saveAttendance(event)" class="space-y-3 text-sm">
+        <input type="hidden" id="att_id">
+        <div>
+          <label class="block text-xs font-medium mb-1">選擇員工</label>
+          <select id="att_empId" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500"></select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">日期</label>
+            <input type="date" id="att_date" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">類別</label>
+            <select id="att_category" onchange="toggleAttSubtype()" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="leave">請假</option>
+              <option value="overtime">加班</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium mb-1">假別 / 加班類型</label>
+            <select id="att_type" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+              <!-- JS 動態載入 -->
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1">時數 (小時)</label>
+            <input type="number" step="0.5" id="att_hours" required class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1">事由 / 備註</label>
+          <input type="text" id="att_note" class="w-full border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div class="flex justify-end gap-2 pt-4">
+          <button type="button" onclick="closeAttendanceModal()" class="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">取消</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">儲存資料</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- modal: 薪資單明細與列印 -->
+  <div id="payslipModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-xl max-w-2xl w-full p-6 shadow-xl space-y-6">
+      <div class="flex justify-between items-center no-print border-b pb-4">
+        <h3 class="text-lg font-bold text-slate-800">正式薪資發放明細單</h3>
+        <div class="flex gap-2">
+          <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-1.5 rounded-lg transition">列印 / 存為 PDF</button>
+          <button onclick="closePayslipModal()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm px-3 py-1.5 rounded-lg transition">關閉</button>
+        </div>
+      </div>
+
+      <!-- 可列印區域 -->
+      <div id="printArea" class="space-y-4 text-slate-800 font-sans">
+        <div class="text-center border-b-2 border-slate-800 pb-3">
+          <h2 class="text-2xl font-bold tracking-wide">草圖設計工作室</h2>
+          <p class="text-sm text-slate-600 font-medium">員工薪資發放明細單 (符合勞基法第 23 條規定)</p>
+          <p class="text-xs text-slate-500 mt-1" id="ps_payPeriod">計薪年月：2026-01</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div><span class="font-bold">員工工號：</span><span id="ps_empCode"></span></div>
+          <div><span class="font-bold">員工姓名：</span><span id="ps_empName"></span></div>
+          <div><span class="font-bold">身分證字號：</span><span id="ps_idCard"></span></div>
+          <div><span class="font-bold">匯款銀行帳號：</span><span id="ps_bankAccount"></span></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6 text-xs">
+          <!-- 給付項目 (僅顯示有發出的項目，未填寫/為0自動隱藏) -->
+          <div class="border rounded-lg p-3 space-y-2">
+            <div class="font-bold border-b pb-1 text-emerald-700 text-sm flex justify-between">
+              <span>應給付項目 (+)</span>
+              <span>金額 (NTD)</span>
+            </div>
+            <div id="ps_row_baseSalary" class="flex justify-between"><span>本薪 / 底薪 (含半年調薪)</span><span id="ps_baseSalary">0</span></div>
+            <div id="ps_row_foodAllowance" class="flex justify-between"><span>基本伙食津貼</span><span id="ps_foodAllowance">0</span></div>
+            <div id="ps_row_dutyAllowance" class="flex justify-between"><span>基本職務津貼</span><span id="ps_dutyAllowance">0</span></div>
+            <!-- 動態加給/津貼/補助/獎金項目將自動插入此處 -->
+            <div id="ps_dynamicBonusesContainer" class="space-y-1"></div>
+            <div id="ps_row_overtimePay" class="flex justify-between"><span>加班費合計</span><span id="ps_overtimePay">0</span></div>
+            <div class="border-t pt-1 font-bold flex justify-between text-slate-900">
+              <span>應給付總額</span><span id="ps_totalGross">0</span>
+            </div>
+          </div>
+
+          <!-- 應扣項目 (僅顯示有扣除的項目，未填寫/為0自動隱藏) -->
+          <div class="border rounded-lg p-3 space-y-2">
+            <div class="font-bold border-b pb-1 text-red-700 text-sm flex justify-between">
+              <span>應扣除項目 (-)</span>
+              <span>金額 (NTD)</span>
+            </div>
+            <div id="ps_row_leaveDeduction" class="flex justify-between"><span>請假扣款 (事/病/生理假)</span><span id="ps_leaveDeduction">0</span></div>
+            <div id="ps_row_laborIns" class="flex justify-between"><span>勞保費自負額</span><span id="ps_laborIns">0</span></div>
+            <div id="ps_row_healthIns" class="flex justify-between"><span>健保費自負額</span><span id="ps_healthIns">0</span></div>
+            <div class="border-t pt-1 font-bold flex justify-between text-slate-900">
+              <span>扣除總額</span><span id="ps_totalDeduction">0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-indigo-50 border border-indigo-200 p-3 rounded-lg flex justify-between items-center text-indigo-900 font-bold">
+          <span class="text-sm">實領金額 (NET PAY)：</span>
+          <span class="text-xl" id="ps_netPay">NT$ 0</span>
+        </div>
+
+        <div class="text-[10px] text-slate-500 space-y-1 pt-2 border-t">
+          <p>備註：本薪資單係依據勞動基準法規定開立，計算基準每日以 8 小時，每月以 30 日（240 小時）計。</p>
+          <p>離職結算說明：若遇當月離職，底薪、固定津貼與勞保自負額自動依在職天數比例按日計算；健保費依規定按月全額計收。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- JavaScript 邏輯引擎 -->
+  <script>
+    // Google Apps Script 部署網址
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwgoey3rt-R079loXBB6DqcBPRHZMIGYWJB0OlJtdrzuECYzKB4U_4ce2qMgYBGGD3s/exec";
+
+    let employees = [];
+    let attendance = [];
+    let monthlyBonuses = {}; // 格式：{ 'empId_YYYY-MM': [ { name: '交通津貼', amount: 0 }, ... ] }
+
+    const defaultBonusTypes = [
+      '伙食津貼', '職務津貼', '交通津貼', '全勤獎金', '三節禮金', 
+      '生日禮金', '年終獎金', '新人獎金', '績效獎金', '專案獎金', '其他補助'
+    ];
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const now = new Date();
+      const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      document.getElementById('currentMonth').value = currentYearMonth;
+      loadLocalData();
+    });
+
+    function loadLocalData() {
+      const savedEmp = localStorage.getItem('draft_employees');
+      const savedAtt = localStorage.getItem('draft_attendance');
+      const savedBonuses = localStorage.getItem('draft_monthly_bonuses');
+
+      if (savedEmp) {
+        employees = JSON.parse(savedEmp);
+      } else {
+        employees = [];
+      }
+
+      if (savedAtt) {
+        attendance = JSON.parse(savedAtt);
+      } else {
+        attendance = [];
+      }
+
+      if (savedBonuses) {
+        monthlyBonuses = JSON.parse(savedBonuses);
+      }
+
+      renderAll();
+    }
+
+    function saveToLocal() {
+      localStorage.setItem('draft_employees', JSON.stringify(employees));
+      localStorage.setItem('draft_attendance', JSON.stringify(attendance));
+      localStorage.setItem('draft_monthly_bonuses', JSON.stringify(monthlyBonuses));
+    }
+
+    // --- Google Apps Script 雲端同步功能 ---
+    async function syncToCloud() {
+      if (!confirm('確定要將當前系統資料同步上傳至 Google 雲端試算表嗎？')) return;
+
+      const payload = {
+        action: "saveData",
+        employees: employees,
+        attendance: attendance,
+        monthlyBonuses: monthlyBonuses
+      };
+
+      try {
+        // 提示同步中
+        const btn = document.querySelector('button[onclick="syncToCloud()"]');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '⏳ 同步中...';
+        btn.disabled = true;
+
+        // 使用 no-cors 或標準 fetch (視您的 GAS 權限設定而定，通常 POST 需妥善處理跨域回應)
+        await fetch(GAS_URL, {
+          method: "POST",
+          mode: "no-cors", 
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        alert('資料已成功發送至 Google Apps Script 雲端備份！');
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        alert('雲端同步發生錯誤，請檢查網路連線或 GAS 網址設定。');
+        const btn = document.querySelector('button[onclick="syncToCloud()"]');
+        btn.innerHTML = '☁️ 同步至雲端';
+        btn.disabled = false;
+      }
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.nav-btn').forEach(el => {
+        el.classList.remove('bg-indigo-600', 'text-white');
+        el.classList.add('text-slate-300');
+      });
+
+      document.getElementById(`sec-${tab}`).classList.remove('hidden');
+      document.getElementById(`tab-${tab}`).classList.add('bg-indigo-600', 'text-white');
+      document.getElementById(`tab-${tab}`).classList.remove('text-slate-300');
+    }
+
+    function maskText(str, type) {
+      if (!str) return '';
+      const mode = document.getElementById('maskMode').value;
+      if (mode === 'visible') return str;
+      if (mode === 'hidden') return '***';
+
+      if (type === 'idCard') {
+        return str.length > 5 ? str.substring(0, 3) + '****' + str.substring(str.length - 3) : '***';
+      }
+      if (type === 'bank') {
+        return str.length > 6 ? str.substring(0, 4) + '****' + str.substring(str.length - 4) : '***';
+      }
+      return str;
+    }
+
+    // --- 自動精確計算年資 (精確至年、月) ---
+    function calculateSeniority(startDateStr, currentMonthStr) {
+      if (!startDateStr) return { years: 0, months: 0, totalMonths: 0, text: '0年 0個月' };
+      const start = new Date(startDateStr);
+      const [curYear, curMonth] = currentMonthStr.split('-').map(Number);
+      const curDate = new Date(curYear, curMonth - 1, 1);
+
+      let years = curDate.getFullYear() - start.getFullYear();
+      let months = (curDate.getMonth() + 1) - (start.getMonth() + 1);
+
+      if (months < 0) {
+        years--;
+        months += 12;
+      }
+      if (years < 0) {
+        return { years: 0, months: 0, totalMonths: 0, text: '尚未到職' };
+      }
+
+      const totalMonths = years * 12 + months;
+      return { years, months, totalMonths, text: `${years}年 ${months}個月` };
+    }
+
+    function calculateAdjustedSalary(emp, currentMonthStr) {
+      const start = new Date(emp.startDate);
+      const current = new Date(currentMonthStr + '-01');
+      if (current < start) return emp.baseSalary;
+
+      const seniority = calculateSeniority(emp.startDate, currentMonthStr);
+      const periods = Math.floor(seniority.totalMonths / 6);
+
+      let adjustedSalary = emp.baseSalary;
+      for (let i = 0; i < periods; i++) {
+        adjustedSalary *= 1.015;
+      }
+      return Math.round(adjustedSalary);
+    }
+
+    function isEmployeeActiveInMonth(emp, currentMonthStr) {
+      if (emp.resignationDate) {
+        const resigDate = new Date(emp.resignationDate);
+        const resigYearMonth = `${resigDate.getFullYear()}-${String(resigDate.getMonth() + 1).padStart(2, '0')}`;
+        if (resigYearMonth < currentMonthStr) return false;
+      }
+      const startDate = new Date(emp.startDate);
+      const startYearMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}`;
+      if (startYearMonth > currentMonthStr) return false;
+      return true;
+    }
+
+    function getResignationRatio(emp, currentMonthStr) {
+      if (!emp || !emp.resignationDate || !emp.resignationDate.startsWith(currentMonthStr)) {
+        return { isResigned: false, ratio: 1, workedDays: 30 };
+      }
+      const resigDate = new Date(emp.resignationDate);
+      const [year, month] = currentMonthStr.split('-').map(Number);
+      if (resigDate.getFullYear() === year && (resigDate.getMonth() + 1) === month) {
+        let workedDays = Math.min(30, Math.max(1, resigDate.getDate()));
+        return { isResigned: true, ratio: workedDays / 30, workedDays };
+      }
+      return { isResigned: false, ratio: 1, workedDays: 30 };
+    }
+
+    function calculateInsurance(totalFixedSalary, emp, currentMonthStr) {
+      let laborBracket = Math.max(27470, Math.min(45800, totalFixedSalary));
+      let fullLaborIns = Math.round(laborBracket * 0.11 * 0.2);
+
+      let healthBracket = Math.max(27470, Math.min(182000, totalFixedSalary));
+      let healthIns = Math.round(healthBracket * 0.0517 * 0.3);
+
+      const resigInfo = getResignationRatio(emp, currentMonthStr);
+      let laborIns = resigInfo.isResigned ? Math.round(fullLaborIns * resigInfo.ratio) : fullLaborIns;
+
+      return { laborIns, healthIns, isProrated: resigInfo.isResigned, insuredDays: resigInfo.workedDays };
+    }
+
+    // --- 取得當月員工加給清單 (自動產生生日禮金、1月15日自動發放年終獎金並按到職日未滿一年比例計算) ---
+    function getEmpBonusesList(emp, currentMonthStr) {
+      const key = `${emp.id}_${currentMonthStr}`;
+      
+      if (monthlyBonuses[key]) {
+        return monthlyBonuses[key];
+      }
+
+      let list = [];
+      const [curYear, curMonth] = currentMonthStr.split('-').map(Number);
+
+      // 1. 自動檢查是否為當月壽星 (生日禮金 1000 元)
+      if (emp.dob) {
+        const empDobMonth = parseInt(emp.dob.split('-')[1], 10);
+        if (empDobMonth === curMonth) {
+          list.push({ name: '生日禮金', amount: 1000 });
+        }
+      }
+
+      // 2. 年終獎金固定於 1 月份（1月15日發放）計算
+      if (curMonth === 1) {
+        const targetYear = curYear - 1; // 計算去年度年終
+        const startDate = new Date(emp.startDate);
+        const yearStart = new Date(targetYear, 0, 1);
+        const yearEnd = new Date(targetYear, 11, 31);
+        
+        let effectiveStart = startDate > yearStart ? startDate : yearStart;
+        let effectiveEnd = yearEnd;
+
+        if (emp.resignationDate) {
+          const resigDate = new Date(emp.resignationDate);
+          if (resigDate.getFullYear() === targetYear) {
+            effectiveEnd = resigDate < yearEnd ? resigDate : yearEnd;
+          } else if (resigDate.getFullYear() < targetYear) {
+            effectiveStart = new Date(targetYear + 1, 0, 1);
+          }
+        }
+
+        if (effectiveStart <= effectiveEnd) {
+          const diffTime = Math.abs(effectiveEnd - effectiveStart);
+          const workedDaysInYear = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+          const isLeapYear = (targetYear % 4 === 0 && targetYear % 100 !== 0) || (targetYear % 400 === 0);
+          const totalDaysInYear = isLeapYear ? 366 : 365;
+
+          const ratio = Math.min(1, workedDaysInYear / totalDaysInYear);
+          const fullBase = calculateAdjustedSalary(emp, `${targetYear}-12`);
+          const calculatedBonus = Math.round(fullBase * ratio);
+
+          if (calculatedBonus > 0) {
+            list.push({ name: '年終獎金', amount: calculatedBonus });
+          }
+        }
+      }
+
+      return list; 
+    }
+
+    function renderAll() {
+      renderEmployees();
+      renderAttendance();
+      renderPayroll();
+    }
+
+    function renderEmployees() {
+      const currentMonth = document.getElementById('currentMonth').value;
+      const tbody = document.getElementById('employeeTableBody');
+      tbody.innerHTML = '';
+
+      const activeEmployees = employees.filter(emp => isEmployeeActiveInMonth(emp, currentMonth));
+      if (activeEmployees.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">當前月份無在職員工資料</td></tr>`;
+        return;
+      }
+
+      activeEmployees.forEach(emp => {
+        const resigInfo = getResignationRatio(emp, currentMonth);
+        const adjustedSalary = Math.round(calculateAdjustedSalary(emp, currentMonth) * resigInfo.ratio);
+        const ins = calculateInsurance(calculateAdjustedSalary(emp, currentMonth) + Number(emp.foodAllowance) + Number(emp.dutyAllowance), emp, currentMonth);
+        const seniority = calculateSeniority(emp.startDate, currentMonth);
+        const resigText = emp.resignationDate ? `<br><span class="text-xs text-red-500 font-semibold">離職: ${emp.resignationDate}</span>` : '';
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 hover:bg-slate-50">
+            <td class="p-3 font-medium">${emp.name}<br><span class="text-xs text-slate-400">${emp.code}</span></td>
+            <td class="p-3">${maskText(emp.idCard, 'idCard')}<br><span class="text-xs text-slate-400">${emp.dob}</span></td>
+            <td class="p-3">${emp.startDate}<br><span class="text-xs text-indigo-600 font-semibold">年資: ${seniority.text}</span>${resigText}</td>
+            <td class="p-3">${maskText(emp.bankAccount, 'bank')}</td>
+            <td class="p-3">NT$ ${emp.baseSalary.toLocaleString()}</td>
+            <td class="p-3 text-emerald-600 font-bold">
+              NT$ ${adjustedSalary.toLocaleString()}
+              ${resigInfo.isResigned ? `<br><span class="text-[10px] text-amber-600 font-bold">(離職按日 ${resigInfo.workedDays}天)</span>` : ''}
+            </td>
+            <td class="p-3 text-xs">
+              伙食: $${Math.round(emp.foodAllowance * resigInfo.ratio)}<br>職務: $${Math.round(emp.dutyAllowance * resigInfo.ratio)}
+            </td>
+            <td class="p-3 text-xs">
+              勞保: $${ins.laborIns}${ins.isProrated ? ` <span class="text-[10px] text-amber-600 font-bold">(按日)</span>` : ''}<br>
+              健保: $${ins.healthIns} <span class="text-[10px] text-slate-400">(按月)</span>
+            </td>
+            <td class="p-3 text-right">
+              <button onclick="openEmployeeModal('${emp.id}')" class="text-indigo-600 hover:underline mr-2">編輯</button>
+              <button onclick="deleteEmployee('${emp.id}')" class="text-red-500 hover:underline">刪除</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    function renderAttendance() {
+      const currentMonth = document.getElementById('currentMonth').value;
+      const tbody = document.getElementById('attendanceTableBody');
+      tbody.innerHTML = '';
+
+      const activeEmpIds = employees.filter(emp => isEmployeeActiveInMonth(emp, currentMonth)).map(e => e.id);
+      const filtered = attendance.filter(a => a.date.startsWith(currentMonth) && activeEmpIds.includes(a.empId));
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-slate-400">當前月份無差勤紀錄</td></tr>`;
+        return;
+      }
+
+      filtered.forEach(att => {
+        const emp = employees.find(e => e.id === att.empId);
+        const empName = emp ? emp.name : '未知員工';
+        let typeText = att.category === 'leave' ? 
+          ({ personal: '事假 (全扣)', sick: '病假 (半扣)', menstrual: '生理假 (半扣)', official: '公假 (不扣)' }[att.type] || att.type) :
+          ({ weekday: '平日加班 (1.34/1.67)', restday: '休息日加班', holiday: '國定假日 (2倍)' }[att.type] || att.type);
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 hover:bg-slate-50">
+            <td class="p-3">${att.date}</td>
+            <td class="p-3 font-medium">${empName}</td>
+            <td class="p-3">
+              <span class="px-2 py-1 rounded text-xs ${att.category === 'leave' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}">
+                ${att.category === 'leave' ? '請假' : '加班'}
+              </span>
+            </td>
+            <td class="p-3">${typeText}</td>
+            <td class="p-3 font-bold">${att.hours} 小時</td>
+            <td class="p-3 text-slate-500">${att.note || '-'}</td>
+            <td class="p-3 text-right">
+              <button onclick="deleteAttendance('${att.id}')" class="text-red-500 hover:underline">刪除</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    function renderPayroll() {
+      const currentMonth = document.getElementById('currentMonth').value;
+      const tbody = document.getElementById('payrollTableBody');
+      tbody.innerHTML = '';
+
+      const activeEmployees = employees.filter(emp => isEmployeeActiveInMonth(emp, currentMonth));
+      if (activeEmployees.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">當前月份無薪資發放對象</td></tr>`;
+        return;
+      }
+
+      activeEmployees.forEach(emp => {
+        const resigInfo = getResignationRatio(emp, currentMonth);
+        const fullAdjustedSalary = calculateAdjustedSalary(emp, currentMonth);
+        const adjustedSalary = Math.round(fullAdjustedSalary * resigInfo.ratio);
+        const food = Math.round(Number(emp.foodAllowance) * resigInfo.ratio);
+        const duty = Math.round(Number(emp.dutyAllowance) * resigInfo.ratio);
+        const hourlyRate = (fullAdjustedSalary + Number(emp.foodAllowance) + Number(emp.dutyAllowance)) / 240;
+
+        const empAtt = attendance.filter(a => a.empId === emp.id && a.date.startsWith(currentMonth));
+        let leaveDeduction = 0;
+        let overtimePay = 0;
+
+        empAtt.forEach(a => {
+          if (a.category === 'leave') {
+            if (a.type === 'personal') leaveDeduction += a.hours * hourlyRate;
+            if (a.type === 'sick' || a.type === 'menstrual') leaveDeduction += a.hours * hourlyRate * 0.5;
+          } else if (a.category === 'overtime') {
+            if (a.type === 'weekday') {
+              overtimePay += (Math.min(2, a.hours) * hourlyRate * 1.34) + (Math.max(0, a.hours - 2) * hourlyRate * 1.67);
+            } else if (a.type === 'holiday') {
+              overtimePay += a.hours * hourlyRate * 2.0;
+            } else {
+              overtimePay += a.hours * hourlyRate * 1.34;
+            }
+          }
+        });
+
+        leaveDeduction = Math.round(leaveDeduction);
+        overtimePay = Math.round(overtimePay);
+
+        const bonusList = getEmpBonusesList(emp, currentMonth);
+        const totalBonus = bonusList.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        const bonusSummaryHtml = bonusList.length > 0 ? bonusList.map(b => `${b.name}: $${Number(b.amount).toLocaleString()}`).join('<br>') : '<span class="text-slate-400">無 (0)</span>';
+
+        const fixedTotal = fullAdjustedSalary + Number(emp.foodAllowance) + Number(emp.dutyAllowance);
+        const ins = calculateInsurance(fixedTotal, emp, currentMonth);
+        const totalDeduction = leaveDeduction + ins.laborIns + ins.healthIns;
+        const netPay = (adjustedSalary + food + duty + totalBonus + overtimePay) - totalDeduction;
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 hover:bg-slate-50">
+            <td class="p-3 font-medium">${emp.name}<br><span class="text-xs text-slate-400">${emp.code}</span></td>
+            <td class="p-3">
+              NT$ ${adjustedSalary.toLocaleString()}
+              ${resigInfo.isResigned ? `<br><span class="text-[10px] text-amber-600 font-bold">(離職按日 ${resigInfo.workedDays}天)</span>` : ''}
+            </td>
+            <td class="p-3">NT$ ${(food + duty).toLocaleString()}</td>
+            <td class="p-3 text-xs text-amber-600 font-medium leading-relaxed">
+              ${bonusSummaryHtml}
+            </td>
+            <td class="p-3 text-emerald-600 font-medium">NT$ ${overtimePay.toLocaleString()}</td>
+            <td class="p-3 text-red-500">- NT$ ${leaveDeduction.toLocaleString()}</td>
+            <td class="p-3 text-red-500">
+              - NT$ ${(ins.laborIns + ins.healthIns).toLocaleString()}
+              ${ins.isProrated ? `<br><span class="text-[10px] text-amber-600 font-bold">(勞保按日/健保按月)</span>` : ''}
+            </td>
+            <td class="p-3 text-base font-bold text-indigo-700">NT$ ${netPay.toLocaleString()}</td>
+            <td class="p-3 text-right space-y-1">
+              <button onclick="openBonusModal('${emp.id}')" class="bg-amber-50 text-amber-600 hover:bg-amber-100 px-2.5 py-1 rounded-lg text-xs font-semibold transition block w-full text-center">後台調整項目</button>
+              <button onclick="openPayslipModal('${emp.id}')" class="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2.5 py-1 rounded-lg text-xs font-semibold transition block w-full text-center">查看薪資單</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    // --- 員工 CRUD ---
+    function openEmployeeModal(empId = null) {
+      document.getElementById('empForm').reset();
+      if (empId) {
+        const emp = employees.find(e => e.id === empId);
+        document.getElementById('empModalTitle').innerText = '編輯員工資料';
+        document.getElementById('emp_id').value = emp.id;
+        document.getElementById('emp_code').value = emp.code;
+        document.getElementById('emp_name').value = emp.name;
+        document.getElementById('emp_idCard').value = emp.idCard;
+        document.getElementById('emp_dob').value = emp.dob;
+        document.getElementById('emp_startDate').value = emp.startDate;
+        document.getElementById('emp_resignationDate').value = emp.resignationDate || '';
+        document.getElementById('emp_bankAccount').value = emp.bankAccount;
+        document.getElementById('emp_baseSalary').value = emp.baseSalary;
+        document.getElementById('emp_foodAllowance').value = emp.foodAllowance;
+        document.getElementById('emp_dutyAllowance').value = emp.dutyAllowance;
+      } else {
+        document.getElementById('empModalTitle').innerText = '新增員工';
+        document.getElementById('emp_id').value = '';
+        document.getElementById('emp_code').value = `T2026${String(employees.length + 1).padStart(4, '0')}`;
+        document.getElementById('emp_foodAllowance').value = 0;
+        document.getElementById('emp_dutyAllowance').value = 0;
+      }
+      document.getElementById('employeeModal').classList.remove('hidden');
+      document.getElementById('employeeModal').classList.add('flex');
+    }
+
+    function closeEmployeeModal() {
+      document.getElementById('employeeModal').classList.remove('flex');
+      document.getElementById('employeeModal').classList.add('hidden');
+    }
+
+    function saveEmployee(event) {
+      event.preventDefault();
+      const id = document.getElementById('emp_id').value;
+      const empData = {
+        id: id ? id : Date.now().toString(),
+        code: document.getElementById('emp_code').value,
+        name: document.getElementById('emp_name').value,
+        idCard: document.getElementById('emp_idCard').value,
+        dob: document.getElementById('emp_dob').value,
+        startDate: document.getElementById('emp_startDate').value,
+        resignationDate: document.getElementById('emp_resignationDate').value,
+        bankAccount: document.getElementById('emp_bankAccount').value,
+        baseSalary: Number(document.getElementById('emp_baseSalary').value),
+        foodAllowance: Number(document.getElementById('emp_foodAllowance').value),
+        dutyAllowance: Number(document.getElementById('emp_dutyAllowance').value)
+      };
+
+      if (id) {
+        const index = employees.findIndex(e => e.id === id);
+        if (index !== -1) employees[index] = empData;
+      } else {
+        employees.push(empData);
+      }
+
+      saveToLocal();
+      closeEmployeeModal();
+      renderAll();
+    }
+
+    function deleteEmployee(empId) {
+      if (confirm('確定要刪除這位員工嗎？相關紀錄也會一併清除。')) {
+        employees = employees.filter(e => e.id !== empId);
+        attendance = attendance.filter(a => a.empId !== empId);
+        saveToLocal();
+        renderAll();
+      }
+    }
+
+    // --- 後台獎金與津貼補助動態維護 Modal ---
+    function openBonusModal(empId) {
+      const emp = employees.find(e => e.id === empId);
+      const currentMonth = document.getElementById('currentMonth').value;
+      if (!emp) return;
+
+      document.getElementById('bonusModalTitle').innerText = `調整 ${emp.name} (${currentMonth}) 津貼、補助與獎金`;
+      document.getElementById('bm_empId').value = emp.id;
+      document.getElementById('bm_month').value = currentMonth;
+
+      const container = document.getElementById('bonusRowsContainer');
+      container.innerHTML = '';
+
+      const bonusList = getEmpBonusesList(emp, currentMonth);
+      if (bonusList.length === 0) {
+        addBonusItemRow('年終獎金', 0);
+      } else {
+        bonusList.forEach(item => addBonusItemRow(item.name, item.amount));
+      }
+
+      document.getElementById('bonusModal').classList.remove('hidden');
+      document.getElementById('bonusModal').classList.add('flex');
+    }
+
+    function addBonusItemRow(nameVal = '年終獎金', amountVal = 0) {
+      const container = document.getElementById('bonusRowsContainer');
+      const rowId = 'row_' + Math.random().toString(36).substr(2, 9);
+
+      let optionsHtml = defaultBonusTypes.map(t => `<option value="${t}" ${t === nameVal ? 'selected' : ''}>${t}</option>`).join('');
+      if (nameVal && !defaultBonusTypes.includes(nameVal)) {
+        optionsHtml += `<option value="${nameVal}" selected>${nameVal}</option>`;
+      }
+
+      const div = document.createElement('div');
+      div.id = rowId;
+      div.className = "flex items-center gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200";
+      div.innerHTML = `
+        <div class="flex-1">
+          <label class="block text-[10px] text-slate-500 mb-0.5">項目名稱 (津貼/補助/獎金)</label>
+          <select class="bonus-name w-full border rounded p-1.5 text-xs bg-white outline-none focus:ring-1 focus:ring-indigo-500">
+            ${optionsHtml}
+          </select>
+        </div>
+        <div class="w-32">
+          <label class="block text-[10px] text-slate-500 mb-0.5">金額 (NTD)</label>
+          <input type="number" class="bonus-amount w-full border rounded p-1.5 text-xs bg-white outline-none focus:ring-1 focus:ring-indigo-500" value="${amountVal}" required>
+        </div>
+        <button type="button" onclick="document.getElementById('${rowId}').remove()" class="text-red-500 hover:text-red-700 px-2 pt-4 font-bold text-base">&times;</button>
+      `;
+      container.appendChild(div);
+    }
+
+    function closeBonusModal() {
+      document.getElementById('bonusModal').classList.remove('flex');
+      document.getElementById('bonusModal').classList.add('hidden');
+    }
+
+    function saveMonthlyBonuses(event) {
+      event.preventDefault();
+      const empId = document.getElementById('bm_empId').value;
+      const month = document.getElementById('bm_month').value;
+      const key = `${empId}_${month}`;
+
+      const rows = document.querySelectorAll('#bonusRowsContainer > div');
+      let newList = [];
+
+      rows.forEach(row => {
+        const name = row.querySelector('.bonus-name').value.trim();
+        const amount = Number(row.querySelector('.bonus-amount').value) || 0;
+        if (name) {
+          newList.push({ name, amount });
+        }
+      });
+
+      monthlyBonuses[key] = newList;
+      saveToLocal();
+      closeBonusModal();
+      renderAll();
+    }
+
+    // --- 差勤 CRUD ---
+    function openAttendanceModal() {
+      if (employees.length === 0) {
+        alert('請先新增至少一位員工才能登錄差勤紀錄！');
+        return;
+      }
+      document.getElementById('attForm').reset();
+      document.getElementById('att_id').value = '';
+      
+      const select = document.getElementById('att_empId');
+      select.innerHTML = '';
+      employees.forEach(emp => {
+        select.innerHTML += `<option value="${emp.id}">${emp.name} (${emp.code})</option>`;
+      });
+
+      document.getElementById('att_date').value = document.getElementById('currentMonth').value + '-01';
+      toggleAttSubtype();
+      document.getElementById('attendanceModal').classList.remove('hidden');
+      document.getElementById('attendanceModal').classList.add('flex');
+    }
+
+    function closeAttendanceModal() {
+      document.getElementById('attendanceModal').classList.remove('flex');
+      document.getElementById('attendanceModal').classList.add('hidden');
+    }
+
+    function toggleAttSubtype() {
+      const category = document.getElementById('att_category').value;
+      const typeSelect = document.getElementById('att_type');
+      typeSelect.innerHTML = category === 'leave' ? `
+        <option value="personal">事假 (全扣)</option>
+        <option value="sick">病假 (半扣)</option>
+        <option value="menstrual">生理假 (半扣)</option>
+        <option value="official">公假 (不扣)</option>
+      ` : `
+        <option value="weekday">平日加班 (1.34 / 1.67倍)</option>
+        <option value="restday">休息日加班</option>
+        <option value="holiday">國定假日 (2倍)</option>
+      `;
+    }
+
+    function saveAttendance(event) {
+      event.preventDefault();
+      attendance.push({
+        id: Date.now().toString(),
+        empId: document.getElementById('att_empId').value,
+        date: document.getElementById('att_date').value,
+        category: document.getElementById('att_category').value,
+        type: document.getElementById('att_type').value,
+        hours: Number(document.getElementById('att_hours').value),
+        note: document.getElementById('att_note').value
+      });
+      saveToLocal();
+      closeAttendanceModal();
+      renderAll();
+    }
+
+    function deleteAttendance(attId) {
+      if (confirm('確定要刪除這筆差勤紀錄嗎？')) {
+        attendance = attendance.filter(a => a.id !== attId);
+        saveToLocal();
+        renderAll();
+      }
+    }
+
+    // --- Excel / CSV 匯入 ---
+    function handleExcelImport(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+          let headerRowIdx = -1;
+          let colMap = {};
+
+          for (let i = 0; i < Math.min(rows.length, 5); i++) {
+            const row = rows[i];
+            if (row && row.some(cell => cell && (String(cell).includes('身分證') || String(cell).includes('姓名')))) {
+              headerRowIdx = i;
+              row.forEach((cell, colIndex) => { if (cell) colMap[String(cell).trim()] = colIndex; });
+              break;
+            }
+          }
+
+          if (headerRowIdx === -1) {
+            alert('找不到正確的表頭欄位，請確認 Excel 格式是否正確。');
+            return;
+          }
+
+          let importCount = 0;
+          for (let i = headerRowIdx + 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length === 0) continue;
+
+            const getVal = (keys) => {
+              for (let k of keys) {
+                for (let mapKey in colMap) {
+                  if (mapKey.includes(k) && row[colMap[mapKey]] !== undefined) return String(row[colMap[mapKey]]).trim();
+                }
+              }
+              return '';
+            };
+
+            const idCard = getVal(['身分證號', '身分證字號']);
+            const name = getVal(['姓名']);
+            if (!name || !idCard) continue;
+
+            employees.push({
+              id: (Date.now() + importCount).toString(),
+              code: `T2026${String(employees.length + 1).padStart(4, '0')}`,
+              name: name,
+              idCard: idCard,
+              dob: (getVal(['出生年月日']) || '1990/01/01').replace(/\//g, '-'),
+              startDate: '2026-01-01',
+              resignationDate: '',
+              bankAccount: '004-123456789012',
+              baseSalary: 35000,
+              foodAllowance: 0,
+              dutyAllowance: 0
+            });
+            importCount++;
+          }
+
+          if (importCount > 0) {
+            saveToLocal();
+            renderAll();
+            alert(`成功匯入 ${importCount} 筆員工資料！`);
+          } else {
+            alert('未讀取到有效的員工資料。');
+          }
+        } catch (err) {
+          console.error(err);
+          alert('解析 Excel 失敗。');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      event.target.value = '';
+    }
+
+    function handleCSVImport(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const lines = e.target.result.split('\n');
+        let count = 0;
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].trim().split(',');
+          if (cols.length >= 5) {
+            attendance.push({
+              id: (Date.now() + i).toString(),
+              empId: cols[0].trim(),
+              date: cols[1].trim(),
+              category: cols[2].trim(),
+              type: cols[3].trim(),
+              hours: Number(cols[4].trim()) || 0,
+              note: cols[5] ? cols[5].trim() : ''
+            });
+            count++;
+          }
+        }
+        saveToLocal();
+        renderAll();
+        alert(`成功匯入 ${count} 筆差勤紀錄！`);
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    // --- 薪資單 Modal 操作 (僅顯示有發出的金額項目，未填寫/為0自動隱藏) ---
+    function openPayslipModal(empId) {
+      const emp = employees.find(e => e.id === empId);
+      if (!emp) return;
+
+      const currentMonth = document.getElementById('currentMonth').value;
+      const resigInfo = getResignationRatio(emp, currentMonth);
+      const fullAdjustedSalary = calculateAdjustedSalary(emp, currentMonth);
+      const adjustedSalary = Math.round(fullAdjustedSalary * resigInfo.ratio);
+      const food = Math.round(Number(emp.foodAllowance) * resigInfo.ratio);
+      const duty = Math.round(Number(emp.dutyAllowance) * resigInfo.ratio);
+      const hourlyRate = (fullAdjustedSalary + Number(emp.foodAllowance) + Number(emp.dutyAllowance)) / 240;
+
+      const empAtt = attendance.filter(a => a.empId === emp.id && a.date.startsWith(currentMonth));
+      let leaveDeduction = 0;
+      let overtimePay = 0;
+
+      empAtt.forEach(a => {
+        if (a.category === 'leave') {
+          if (a.type === 'personal') leaveDeduction += a.hours * hourlyRate;
+          if (a.type === 'sick' || a.type === 'menstrual') leaveDeduction += a.hours * hourlyRate * 0.5;
+        } else if (a.category === 'overtime') {
+          if (a.type === 'weekday') {
+            overtimePay += (Math.min(2, a.hours) * hourlyRate * 1.34) + (Math.max(0, a.hours - 2) * hourlyRate * 1.67);
+          } else if (a.type === 'holiday') {
+            overtimePay += a.hours * hourlyRate * 2.0;
+          } else {
+            overtimePay += a.hours * hourlyRate * 1.34;
+          }
+        }
+      });
+
+      leaveDeduction = Math.round(leaveDeduction);
+      overtimePay = Math.round(overtimePay);
+
+      // 動態加給明細
+      const bonusList = getEmpBonusesList(emp, currentMonth);
+      const totalBonus = bonusList.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+      const fixedTotal = fullAdjustedSalary + Number(emp.foodAllowance) + Number(emp.dutyAllowance);
+      const ins = calculateInsurance(fixedTotal, emp, currentMonth);
+      const totalGross = adjustedSalary + food + duty + totalBonus + overtimePay;
+      const totalDeduction = leaveDeduction + ins.laborIns + ins.healthIns;
+      const netPay = totalGross - totalDeduction;
+
+      // 填入薪資單基本欄位
+      document.getElementById('ps_payPeriod').innerText = `計薪年月：${currentMonth}`;
+      document.getElementById('ps_empCode').innerText = emp.code;
+      document.getElementById('ps_empName').innerText = emp.name;
+      document.getElementById('ps_idCard').innerText = maskText(emp.idCard, 'idCard');
+      document.getElementById('ps_bankAccount').innerText = maskText(emp.bankAccount, 'bank');
+
+      const toggleRow = (rowId, val) => {
+        const el = document.getElementById(rowId);
+        if (el) {
+          if (val > 0) {
+            el.style.display = 'flex';
+          } else {
+            el.style.display = 'none';
+          }
+        }
+      };
+
+      document.getElementById('ps_baseSalary').innerText = `${adjustedSalary.toLocaleString()}${resigInfo.isResigned ? ` (按日 ${resigInfo.workedDays}天)` : ''}`;
+      toggleRow('ps_row_baseSalary', adjustedSalary);
+
+      document.getElementById('ps_foodAllowance').innerText = food.toLocaleString();
+      toggleRow('ps_row_foodAllowance', food);
+
+      document.getElementById('ps_dutyAllowance').innerText = duty.toLocaleString();
+      toggleRow('ps_row_dutyAllowance', duty);
+
+      // 動態產生薪資單中的津貼/補助/獎金列 (過濾金額大於0的項目)
+      const dynContainer = document.getElementById('ps_dynamicBonusesContainer');
+      dynContainer.innerHTML = '';
+      const validBonuses = bonusList.filter(b => Number(b.amount) > 0);
+      if (validBonuses.length > 0) {
+        validBonuses.forEach(b => {
+          dynContainer.innerHTML += `<div class="flex justify-between"><span>${b.name}</span><span>${Number(b.amount).toLocaleString()}</span></div>`;
+        });
+      }
+
+      document.getElementById('ps_overtimePay').innerText = overtimePay.toLocaleString();
+      toggleRow('ps_row_overtimePay', overtimePay);
+
+      document.getElementById('ps_totalGross').innerText = totalGross.toLocaleString();
+
+      document.getElementById('ps_leaveDeduction').innerText = `- ${leaveDeduction.toLocaleString()}`;
+      toggleRow('ps_row_leaveDeduction', leaveDeduction);
+
+      document.getElementById('ps_laborIns').innerText = `- ${ins.laborIns.toLocaleString()}${ins.isProrated ? ` (按日 ${ins.insuredDays}天)` : ''}`;
+      toggleRow('ps_row_laborIns', ins.laborIns);
+
+      document.getElementById('ps_healthIns').innerText = `- ${ins.healthIns.toLocaleString()} (按月全額)`;
+      toggleRow('ps_row_healthIns', ins.healthIns);
+
+      document.getElementById('ps_totalDeduction').innerText = `- ${totalDeduction.toLocaleString()}`;
+      document.getElementById('ps_netPay').innerText = `NT$ ${netPay.toLocaleString()}`;
+
+      document.getElementById('payslipModal').classList.remove('hidden');
+      document.getElementById('payslipModal').classList.add('flex');
+    }
+
+    function closePayslipModal() {
+      document.getElementById('payslipModal').classList.remove('flex');
+      document.getElementById('payslipModal').classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
